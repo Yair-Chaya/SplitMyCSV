@@ -1,12 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Split My CSV</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -45,7 +47,7 @@
                 <h1 class="text-3xl font-semibold text-gray-900 mb-2">Split My CSV/Excel</h1>
                 <p class="text-gray-500">Split your files into multiple parts with ease</p>
             </div>
-            
+
             <div class="space-y-6">
                 <div class="space-y-2">
                     <label class="block text-sm font-medium text-gray-700">Select File</label>
@@ -61,7 +63,7 @@
                                 </label>
                                 <p class="pl-1">or drag and drop</p>
                             </div>
-                            <p class="text-xs text-gray-500">CSV, XLSX, or XLS up to 10MB</p>
+                            <p class="text-xs text-gray-500">CSV, XLSX, or XLS up to 50MB</p>
                         </div>
                         <div id="fileInfo" class="hidden space-y-2 text-center">
                             <svg class="mx-auto h-12 w-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -78,9 +80,9 @@
                 <div class="space-y-2">
                     <label class="block text-sm font-medium text-gray-700">Number of Parts</label>
                     <div class="flex items-center space-x-4">
-                        <input type="range" id="numSheets" min="2" max="25" value="2"
+                        <input type="range" id="numParts" min="2" max="25" value="2"
                             class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
-                        <span id="sliderValue" class="text-sm font-medium text-gray-700 min-w-[2rem] text-center">2</span>
+                        <span id="numPartsDisplay" class="text-sm font-medium text-gray-700 min-w-[2rem] text-center">2</span>
                     </div>
                     <div id="fileStats" class="mt-2 text-sm text-gray-600 hidden">
                         <p id="totalRows"></p>
@@ -90,19 +92,27 @@
 
                 <div class="space-y-4">
                     <div class="flex items-center">
-                        <input type="checkbox" id="has_headers" checked
+                        <input type="checkbox" id="keepHeaders" checked
                             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                        <label for="has_headers" class="ml-2 block text-sm text-gray-700">
+                        <label for="keepHeaders" class="ml-2 block text-sm text-gray-700">
                             First row contains column names
                         </label>
                     </div>
 
                     <div class="flex items-center">
-                        <input type="checkbox" id="randomize" checked
+                        <input type="checkbox" id="randomize"
                             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
                         <label for="randomize" class="ml-2 block text-gray-700">
                             Randomize rows before splitting
                         </label>
+                    </div>
+
+                    <div id="nameColumnsSection" class="hidden space-y-2">
+                        <label class="block text-sm font-medium text-gray-700">Name Columns</label>
+                        <p class="text-sm text-gray-500">Select columns that contain names for normalization</p>
+                        <div id="nameColumnsList" class="space-y-2">
+                            <!-- Name columns will be added here -->
+                        </div>
                     </div>
                 </div>
 
@@ -119,241 +129,14 @@
         </div>
     </div>
 
-    <script>
-        // UI Elements
-        const dropZone = document.getElementById('dropZone');
-        const fileInput = document.getElementById('fileInput');
-        const uploadPrompt = document.getElementById('uploadPrompt');
-        const fileInfo = document.getElementById('fileInfo');
-        const fileName = document.getElementById('fileName');
-        const removeFile = document.getElementById('removeFile');
-        const sliderValue = document.getElementById('sliderValue');
-        const totalRows = document.getElementById('totalRows');
-        const rowsPerPart = document.getElementById('rowsPerPart');
-        const fileStats = document.getElementById('fileStats');
-        const splitButton = document.getElementById('splitButton');
-        const hasHeaders = document.getElementById('has_headers');
-        const randomize = document.getElementById('randomize');
-        const numSheets = document.getElementById('numSheets');
+    <script type="module">
+        import { readFile, validateFileSize } from './js/fileHandler.js';
+        import { detectNameColumns, normalizeName } from './js/nameNormalizer.js';
+        import { splitAndDownload } from './js/fileSplitter.js';
+        import { updateFileInfo, updateSplitEstimate, showError, showLoading, initializeUI } from './js/ui.js';
 
-        let currentFile = null;
-        let currentData = null;
-
-        // Update slider value and rows per part
-        function updateSliderValue(value) {
-            sliderValue.textContent = value;
-            if (currentData) {
-                const total = currentData.length;
-                const parts = parseInt(value);
-                const rowsPerPartValue = Math.ceil(total / parts);
-                rowsPerPart.textContent = `Estimated ${rowsPerPartValue.toLocaleString()} rows per part`;
-            }
-        }
-
-        // Read file data
-        async function readFile(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    try {
-                        const data = e.target.result;
-                        const fileExt = file.name.split('.').pop().toLowerCase();
-                        let result;
-
-                        if (fileExt === 'csv') {
-                            // Try to detect delimiter
-                            const firstLine = data.split('\n')[0];
-                            const delimiter = firstLine.includes(';') ? ';' : ',';
-                            
-                            // Parse CSV
-                            const workbook = XLSX.read(data, { type: 'string', raw: true });
-                            result = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-                        } else {
-                            // Parse Excel
-                            const workbook = XLSX.read(data, { type: 'array' });
-                            result = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-                        }
-
-                        resolve(result);
-                    } catch (error) {
-                        reject(error);
-                    }
-                };
-                reader.onerror = reject;
-
-                if (file.name.endsWith('.csv')) {
-                    reader.readAsText(file);
-                } else {
-                    reader.readAsArrayBuffer(file);
-                }
-            });
-        }
-
-        // Update file display
-        async function updateFileDisplay(file) {
-            if (file) {
-                try {
-                    currentFile = file;
-                    uploadPrompt.classList.add('hidden');
-                    fileInfo.classList.remove('hidden');
-                    fileName.textContent = file.name;
-                    
-                    // Read and process file
-                    currentData = await readFile(file);
-                    totalRows.textContent = `Total rows: ${currentData.length.toLocaleString()}`;
-                    updateSliderValue(numSheets.value);
-                    fileStats.classList.remove('hidden');
-                } catch (error) {
-                    alert('Error reading file: ' + error.message);
-                    updateFileDisplay(null);
-                }
-            } else {
-                currentFile = null;
-                currentData = null;
-                uploadPrompt.classList.remove('hidden');
-                fileInfo.classList.add('hidden');
-                fileStats.classList.add('hidden');
-                fileName.textContent = '';
-                fileInput.value = '';
-                totalRows.textContent = '';
-                rowsPerPart.textContent = '';
-            }
-        }
-
-        // Split and download files
-        async function splitAndDownload() {
-            if (!currentFile || !currentData) {
-                alert('Please select a file first');
-                return;
-            }
-
-            try {
-                const numParts = parseInt(numSheets.value);
-                const keepHeaders = hasHeaders.checked;
-                const shouldRandomize = randomize.checked;
-                const fileExt = currentFile.name.split('.').pop().toLowerCase();
-
-                // Prepare data
-                let data = [...currentData];
-                if (shouldRandomize) {
-                    // Fisher-Yates shuffle
-                    for (let i = data.length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [data[i], data[j]] = [data[j], data[i]];
-                    }
-                }
-
-                // Calculate chunk sizes
-                const chunkSize = Math.floor(data.length / numParts);
-                const remainder = data.length % numParts;
-
-                // Create zip file
-                const zip = new JSZip();
-
-                // Split data and create files
-                let startIdx = 0;
-                for (let i = 0; i < numParts; i++) {
-                    const endIdx = startIdx + chunkSize + (i < remainder ? 1 : 0);
-                    const chunk = data.slice(startIdx, endIdx);
-                    
-                    // Convert to appropriate format
-                    let content;
-                    if (fileExt === 'csv') {
-                        // For CSV files
-                        if (keepHeaders) {
-                            // Add header row to each file
-                            content = currentData[0].join(',') + '\n' + chunk.map(row => row.join(',')).join('\n');
-                        } else {
-                            content = chunk.map(row => row.join(',')).join('\n');
-                        }
-                    } else {
-                        // For Excel files
-                        const ws = XLSX.utils.aoa_to_sheet(chunk);
-                        if (keepHeaders) {
-                            // Add header row to each file
-                            XLSX.utils.sheet_add_aoa(ws, [currentData[0]], { origin: 'A1' });
-                            // Shift the data down by one row
-                            const range = XLSX.utils.decode_range(ws['!ref']);
-                            const data = [];
-                            for (let R = range.s.r; R <= range.e.r; R++) {
-                                const row = [];
-                                for (let C = range.s.c; C <= range.e.c; C++) {
-                                    const cell = ws[XLSX.utils.encode_cell({r: R, c: C})];
-                                    row.push(cell ? cell.v : '');
-                                }
-                                data.push(row);
-                            }
-                            ws['!ref'] = XLSX.utils.encode_range({
-                                s: {r: 0, c: 0},
-                                e: {r: data.length, c: data[0].length - 1}
-                            });
-                            data.forEach((row, R) => {
-                                row.forEach((val, C) => {
-                                    ws[XLSX.utils.encode_cell({r: R + 1, c: C})] = {v: val};
-                                });
-                            });
-                        }
-                        content = XLSX.utils.sheet_to_csv(ws);
-                    }
-
-                    // Add to zip
-                    zip.file(`split_part_${i + 1}.${fileExt}`, content);
-                    startIdx = endIdx;
-                }
-
-                // Generate and download zip
-                const zipContent = await zip.generateAsync({ type: 'blob' });
-                saveAs(zipContent, 'split_files.zip');
-            } catch (error) {
-                alert('Error splitting file: ' + error.message);
-            }
-        }
-
-        // Event Listeners
-        fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                updateFileDisplay(file);
-            }
-        });
-
-        removeFile.addEventListener('click', () => {
-            updateFileDisplay(null);
-        });
-
-        numSheets.addEventListener('input', (e) => {
-            updateSliderValue(e.target.value);
-        });
-
-        splitButton.addEventListener('click', splitAndDownload);
-
-        // Drag and drop handlers
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-            });
-        });
-
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dropZone.addEventListener(eventName, () => {
-                dropZone.classList.add('border-blue-500');
-            });
-        });
-
-        ['dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, () => {
-                dropZone.classList.remove('border-blue-500');
-            });
-        });
-
-        dropZone.addEventListener('drop', (e) => {
-            const file = e.dataTransfer.files[0];
-            if (file) {
-                fileInput.files = e.dataTransfer.files;
-                updateFileDisplay(file);
-            }
-        });
+        // Initialize UI when the page loads
+        document.addEventListener('DOMContentLoaded', initializeUI);
     </script>
 </body>
 </html> 
