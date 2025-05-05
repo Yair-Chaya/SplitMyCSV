@@ -1,14 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Split My CSV</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -47,7 +45,7 @@
                 <h1 class="text-3xl font-semibold text-gray-900 mb-2">Split My CSV/Excel</h1>
                 <p class="text-gray-500">Split your files into multiple parts with ease</p>
             </div>
-
+            
             <div class="space-y-6">
                 <div class="space-y-2">
                     <label class="block text-sm font-medium text-gray-700">Select File</label>
@@ -80,9 +78,9 @@
                 <div class="space-y-2">
                     <label class="block text-sm font-medium text-gray-700">Number of Parts</label>
                     <div class="flex items-center space-x-4">
-                        <input type="range" id="numParts" min="2" max="25" value="2"
+                        <input type="range" id="numSheets" min="2" max="25" value="2"
                             class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
-                        <span id="numPartsDisplay" class="text-sm font-medium text-gray-700 min-w-[2rem] text-center">2</span>
+                        <span id="sliderValue" class="text-sm font-medium text-gray-700 min-w-[2rem] text-center">2</span>
                     </div>
                     <div id="fileStats" class="mt-2 text-sm text-gray-600 hidden">
                         <p id="totalRows"></p>
@@ -92,9 +90,9 @@
 
                 <div class="space-y-4">
                     <div class="flex items-center">
-                        <input type="checkbox" id="keepHeaders" checked
+                        <input type="checkbox" id="has_headers" checked
                             class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
-                        <label for="keepHeaders" class="ml-2 block text-sm text-gray-700">
+                        <label for="has_headers" class="ml-2 block text-sm text-gray-700">
                             First row contains column names
                         </label>
                     </div>
@@ -125,25 +123,352 @@
                         This is a free tool. We are not responsible for any mistakes in the output files or duplicates. Please verify your data after splitting.
                     </p>
                 </div>
-
-                <!-- Add error and loading elements -->
-                <div id="error" class="hidden mt-4 p-3 bg-red-50 text-red-700 rounded-md text-sm"></div>
-                <div id="loading" class="hidden mt-4 text-center">
-                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent"></div>
-                    <p class="mt-2 text-sm text-gray-600">Processing file...</p>
-                </div>
             </div>
         </div>
     </div>
 
-    <script type="module">
-        import { readFile, validateFileSize } from './js/fileHandler.js';
-        import { detectNameColumns, normalizeName } from './js/nameNormalizer.js';
-        import { splitAndDownload } from './js/fileSplitter.js';
-        import { updateFileInfo, updateSplitEstimate, showError, showLoading, initializeUI } from './js/ui.js';
+    <script>
+        // UI Elements
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadPrompt = document.getElementById('uploadPrompt');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const removeFile = document.getElementById('removeFile');
+        const sliderValue = document.getElementById('sliderValue');
+        const totalRows = document.getElementById('totalRows');
+        const rowsPerPart = document.getElementById('rowsPerPart');
+        const fileStats = document.getElementById('fileStats');
+        const splitButton = document.getElementById('splitButton');
+        const hasHeaders = document.getElementById('has_headers');
+        const randomize = document.getElementById('randomize');
+        const numSheets = document.getElementById('numSheets');
 
-        // Initialize UI when the page loads
-        document.addEventListener('DOMContentLoaded', initializeUI);
+        let currentFile = null;
+        let currentData = null;
+
+        // Update slider value and rows per part
+        function updateSliderValue(value) {
+            sliderValue.textContent = value;
+            if (currentData) {
+                const total = currentData.length;
+                const parts = parseInt(value);
+                const rowsPerPartValue = Math.ceil(total / parts);
+                rowsPerPart.textContent = `Estimated ${rowsPerPartValue.toLocaleString()} rows per part`;
+            }
+        }
+
+        // Read file data
+        async function readFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const data = e.target.result;
+                        const fileExt = file.name.split('.').pop().toLowerCase();
+                        let result;
+
+                        if (fileExt === 'csv') {
+                            // Try to detect delimiter
+                            const firstLine = data.split('\n')[0];
+                            const delimiter = firstLine.includes(';') ? ';' : ',';
+                            
+                            // Parse CSV
+                            const workbook = XLSX.read(data, { type: 'string', raw: true });
+                            result = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+                        } else {
+                            // Parse Excel
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            result = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+                        }
+
+                        resolve(result);
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                reader.onerror = reject;
+
+                if (file.name.endsWith('.csv')) {
+                    reader.readAsText(file);
+                } else {
+                    reader.readAsArrayBuffer(file);
+                }
+            });
+        }
+
+        // Name detection and normalization
+        function detectNameColumns(data) {
+            if (!data || data.length < 2) return [];
+            
+            const namePatterns = [
+                /^[A-Z][a-z]+$/,  // Single word starting with capital
+                /^[A-Z][a-z]+\s+[A-Z][a-z]+$/,  // Two words, both capitalized
+                /^[A-Z][a-z]+-[A-Z][a-z]+$/,  // Hyphenated names
+                /^[A-Z][a-z]+'[A-Z][a-z]+$/,  // Names with apostrophes
+            ];
+
+            const nameColumns = [];
+            const sampleSize = Math.min(100, data.length - 1); // Check first 100 rows
+            
+            // Check each column
+            for (let col = 0; col < data[0].length; col++) {
+                let nameScore = 0;
+                let totalChecked = 0;
+                
+                // Check sample rows
+                for (let row = 1; row <= sampleSize; row++) {
+                    const value = String(data[row][col] || '').trim();
+                    if (value) {
+                        totalChecked++;
+                        // Check if value matches any name pattern
+                        if (namePatterns.some(pattern => pattern.test(value))) {
+                            nameScore++;
+                        }
+                    }
+                }
+                
+                // If more than 70% of non-empty values look like names, consider it a name column
+                if (totalChecked > 0 && (nameScore / totalChecked) > 0.7) {
+                    nameColumns.push({
+                        index: col,
+                        name: data[0][col] || `Column ${col + 1}`,
+                        confidence: (nameScore / totalChecked) * 100
+                    });
+                }
+            }
+            
+            return nameColumns;
+        }
+
+        function normalizeName(name) {
+            if (!name) return '';
+            
+            // Convert to string and trim
+            name = String(name).trim();
+            
+            // Split into words
+            const words = name.split(/[\s-']+/);
+            
+            // Capitalize each word
+            return words.map(word => {
+                if (!word) return '';
+                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+            }).join(' ');
+        }
+
+        function updateNameColumnsUI(nameColumns) {
+            const nameColumnsSection = document.getElementById('nameColumnsSection');
+            const nameColumnsList = document.getElementById('nameColumnsList');
+            
+            if (nameColumns.length > 0) {
+                nameColumnsSection.classList.remove('hidden');
+                nameColumnsList.innerHTML = nameColumns.map(col => `
+                    <div class="flex items-center space-x-2">
+                        <input type="checkbox" id="nameCol_${col.index}" 
+                            class="name-column-checkbox h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            data-column-index="${col.index}">
+                        <label for="nameCol_${col.index}" class="text-sm text-gray-700">
+                            ${col.name} (${Math.round(col.confidence)}% confidence)
+                        </label>
+                    </div>
+                `).join('');
+            } else {
+                nameColumnsSection.classList.add('hidden');
+            }
+        }
+
+        // Update file display
+        async function updateFileDisplay(file) {
+            if (file) {
+                try {
+                    // Check file size (50MB limit)
+                    if (file.size > 50 * 1024 * 1024) {
+                        throw new Error('File size exceeds 50MB limit');
+                    }
+
+                    currentFile = file;
+                    uploadPrompt.classList.add('hidden');
+                    fileInfo.classList.remove('hidden');
+                    fileName.textContent = file.name;
+                    
+                    // Read and process file
+                    currentData = await readFile(file);
+                    totalRows.textContent = `Total rows: ${currentData.length.toLocaleString()}`;
+                    updateSliderValue(numSheets.value);
+                    fileStats.classList.remove('hidden');
+
+                    // Detect name columns
+                    const nameColumns = detectNameColumns(currentData);
+                    updateNameColumnsUI(nameColumns);
+                } catch (error) {
+                    alert('Error reading file: ' + error.message);
+                    updateFileDisplay(null);
+                }
+            } else {
+                currentFile = null;
+                currentData = null;
+                uploadPrompt.classList.remove('hidden');
+                fileInfo.classList.add('hidden');
+                fileStats.classList.add('hidden');
+                document.getElementById('nameColumnsSection').classList.add('hidden');
+                fileName.textContent = '';
+                fileInput.value = '';
+                totalRows.textContent = '';
+                rowsPerPart.textContent = '';
+            }
+        }
+
+        // Split and download files
+        async function splitAndDownload() {
+            if (!currentFile || !currentData) {
+                alert('Please select a file first');
+                return;
+            }
+
+            try {
+                const numParts = parseInt(numSheets.value);
+                const keepHeaders = hasHeaders.checked;
+                const shouldRandomize = randomize.checked;
+                const fileExt = currentFile.name.split('.').pop().toLowerCase();
+
+                // Get selected name columns
+                const nameColumns = Array.from(document.querySelectorAll('.name-column-checkbox:checked'))
+                    .map(checkbox => parseInt(checkbox.dataset.columnIndex));
+
+                // Prepare data
+                let data = [...currentData];
+                
+                // Normalize names in selected columns
+                if (nameColumns.length > 0) {
+                    for (let row = 1; row < data.length; row++) {
+                        for (const colIndex of nameColumns) {
+                            if (data[row][colIndex]) {
+                                data[row][colIndex] = normalizeName(data[row][colIndex]);
+                            }
+                        }
+                    }
+                }
+
+                if (shouldRandomize) {
+                    // Fisher-Yates shuffle
+                    for (let i = data.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [data[i], data[j]] = [data[j], data[i]];
+                    }
+                }
+
+                // Calculate chunk sizes
+                const chunkSize = Math.floor(data.length / numParts);
+                const remainder = data.length % numParts;
+
+                // Create zip file
+                const zip = new JSZip();
+
+                // Split data and create files
+                let startIdx = 0;
+                for (let i = 0; i < numParts; i++) {
+                    const endIdx = startIdx + chunkSize + (i < remainder ? 1 : 0);
+                    const chunk = data.slice(startIdx, endIdx);
+                    
+                    // Convert to appropriate format
+                    let content;
+                    if (fileExt === 'csv') {
+                        // For CSV files
+                        if (keepHeaders) {
+                            // Add header row to each file
+                            content = currentData[0].join(',') + '\n' + chunk.map(row => row.join(',')).join('\n');
+                        } else {
+                            content = chunk.map(row => row.join(',')).join('\n');
+                        }
+                    } else {
+                        // For Excel files
+                        const ws = XLSX.utils.aoa_to_sheet(chunk);
+                        if (keepHeaders) {
+                            // Add header row to each file
+                            XLSX.utils.sheet_add_aoa(ws, [currentData[0]], { origin: 'A1' });
+                            // Shift the data down by one row
+                            const range = XLSX.utils.decode_range(ws['!ref']);
+                            const data = [];
+                            for (let R = range.s.r; R <= range.e.r; R++) {
+                                const row = [];
+                                for (let C = range.s.c; C <= range.e.c; C++) {
+                                    const cell = ws[XLSX.utils.encode_cell({r: R, c: C})];
+                                    row.push(cell ? cell.v : '');
+                                }
+                                data.push(row);
+                            }
+                            ws['!ref'] = XLSX.utils.encode_range({
+                                s: {r: 0, c: 0},
+                                e: {r: data.length, c: data[0].length - 1}
+                            });
+                            data.forEach((row, R) => {
+                                row.forEach((val, C) => {
+                                    ws[XLSX.utils.encode_cell({r: R + 1, c: C})] = {v: val};
+                                });
+                            });
+                        }
+                        content = XLSX.utils.sheet_to_csv(ws);
+                    }
+
+                    // Add to zip
+                    zip.file(`split_part_${i + 1}.${fileExt}`, content);
+                    startIdx = endIdx;
+                }
+
+                // Generate and download zip
+                const zipContent = await zip.generateAsync({ type: 'blob' });
+                saveAs(zipContent, 'split_files.zip');
+            } catch (error) {
+                alert('Error splitting file: ' + error.message);
+            }
+        }
+
+        // Event Listeners
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                updateFileDisplay(file);
+            }
+        });
+
+        removeFile.addEventListener('click', () => {
+            updateFileDisplay(null);
+        });
+
+        numSheets.addEventListener('input', (e) => {
+            updateSliderValue(e.target.value);
+        });
+
+        splitButton.addEventListener('click', splitAndDownload);
+
+        // Drag and drop handlers
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.add('border-blue-500');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.remove('border-blue-500');
+            });
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                fileInput.files = e.dataTransfer.files;
+                updateFileDisplay(file);
+            }
+        });
     </script>
 </body>
 </html> 
