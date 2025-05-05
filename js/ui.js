@@ -1,5 +1,7 @@
 // UI handling functions
 import { detectNameColumns } from './nameNormalizer.js';
+import { readFile } from './fileHandler.js';
+import { splitAndDownload } from './fileSplitter.js';
 
 export function updateFileInfo(file, data) {
     const fileInfo = document.getElementById('fileInfo');
