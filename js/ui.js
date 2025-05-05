@@ -88,11 +88,14 @@ export function initializeUI() {
         if (!file) return;
 
         try {
+            showLoading(true);
             const data = await readFile(file);
             updateFileInfo(file, data);
             updateSplitEstimate(data, parseInt(slider.value));
         } catch (error) {
             showError(error.message);
+        } finally {
+            showLoading(false);
         }
     });
 
